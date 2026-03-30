@@ -16,12 +16,16 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+import os
 
-TOKEN = os.getenv("8477247508:AAHBAul8zBfNzsAQUsmx-W1ijnQN4IQg9sA")
+TOKEN = os.getenv("TOKEN")
+
+if not TOKEN:
+    TOKEN = "8477247508:AAHBAul8zBfNzsAQUsmx-W1ijnQN4IQg9sA"
 
 # O'ZGARTIRISH KERAK
 ADMIN_ID = 6355362497  # bu yerga o'zingni telegram id'ingni yoz
-CHANNEL_USERNAME = "@your_channel"  # bu yerga kanalingni yoz
+CHANNEL_USERNAME = "@Test_botschool21"  # bu yerga kanalingni yoz
 
 DB_NAME = "bot.db"
 
