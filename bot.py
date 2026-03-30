@@ -1,127 +1,296 @@
+import os
+import sqlite3
 from datetime import datetime
-import random
 
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
 
-TOKEN = "8477247508:AAHBAul8zBfNzsAQUsmx-W1ijnQN4IQg9sA"
+TOKEN = os.getenv("8477247508:AAHBAul8zBfNzsAQUsmx-W1ijnQN4IQg9sA")
 
-motivations = [
-    "Har kuni ozgina harakat ham katta natija beradi.",
-    "Taslim bo‘lma, sen o‘ylagandan kuchliroqsan.",
-    "Bugungi mehnat ertangi g‘alaba.",
-    "Sekin bo‘lsa ham, oldinga yurish muhim.",
-    "Katta natija sabr va intizom bilan keladi."
-]
+# O'ZGARTIRISH KERAK
+ADMIN_ID = 6355362497  # bu yerga o'zingni telegram id'ingni yoz
+CHANNEL_USERNAME = "@your_channel"  # bu yerga kanalingni yoz
+
+DB_NAME = "bot.db"
 
 
-def get_main_keyboard():
+# =========================
+# DATABASE
+# =========================
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            first_name TEXT,
+            username TEXT,
+            joined_at TEXT
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+def add_user(user_id: int, first_name: str, username: str):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT OR IGNORE INTO users (user_id, first_name, username, joined_at)
+        VALUES (?, ?, ?, ?)
+    """, (
+        user_id,
+        first_name,
+        username if username else "",
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def get_users_count() -> int:
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) FROM users")
+    count = cur.fetchone()[0]
+
+    conn.close()
+    return count
+
+
+def get_all_user_ids():
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+
+    cur.execute("SELECT user_id FROM users")
+    rows = cur.fetchall()
+
+    conn.close()
+    return [row[0] for row in rows]
+
+
+# =========================
+# HELPERS
+# =========================
+def main_keyboard():
     keyboard = [
-        ["👋 Salom", "🕒 Vaqt"],
-        ["📅 Sana", "💡 Motivatsiya"],
-        ["🧮 Kalkulyator", "🌐 Kanal"],
-        ["ℹ️ Yordam", "👤 Profil"]
+        ["👤 Profil", "📢 Kanal"],
+        ["ℹ️ Yordam", "📊 Statistika"],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+def admin_keyboard():
+    keyboard = [
+        ["📣 Broadcast", "👥 Userlar soni"],
+        ["🔙 Orqaga"],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+async def is_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except Exception:
+        return False
+
+
+async def check_subscription_message(update: Update):
+    buttons = [
+        [InlineKeyboardButton("📢 Kanalga o'tish", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}")],
+        [InlineKeyboardButton("✅ Tekshirish", callback_data="check_sub")]
+    ]
+    markup = InlineKeyboardMarkup(buttons)
+
+    if update.message:
+        await update.message.reply_text(
+            "Botdan foydalanish uchun avval kanalga obuna bo‘ling.",
+            reply_markup=markup
+        )
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(
+            "Botdan foydalanish uchun avval kanalga obuna bo‘ling.",
+            reply_markup=markup
+        )
+
+
+# =========================
+# COMMANDS
+# =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user.first_name
+    user = update.effective_user
+
+    add_user(user.id, user.first_name, user.username)
+
+    subscribed = await is_subscribed(user.id, context)
+    if not subscribed:
+        await check_subscription_message(update)
+        return
+
     await update.message.reply_text(
-        f"Assalomu alaykum, {user}!\n\n"
-        "Men sizning mukammallashtirilgan Telegram botingizman 🤖\n"
-        "Quyidagi tugmalardan birini tanlang:",
-        reply_markup=get_main_keyboard()
+        f"Assalomu alaykum, {user.first_name}!\n\n"
+        "Xush kelibsiz. Bot tayyor ishlayapti ✅",
+        reply_markup=main_keyboard()
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Bot buyruqlari:\n"
+        "Buyruqlar:\n"
         "/start - botni ishga tushirish\n"
         "/help - yordam\n"
-        "/about - bot haqida\n\n"
-        "Yoki pastdagi tugmalardan foydalaning."
+        "/admin - admin panel\n"
+        "/id - telegram id ni ko‘rish"
     )
 
 
-async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"Sening Telegram ID'ing: {update.effective_user.id}")
+
+
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("Siz admin emassiz.")
+        return
+
     await update.message.reply_text(
-        "Bu bot Python va python-telegram-bot kutubxonasi yordamida yozilgan.\n"
-        "VS Code ichida ishlash uchun mos."
+        "Admin panelga xush kelibsiz.",
+        reply_markup=admin_keyboard()
     )
 
 
+# =========================
+# CALLBACKS
+# =========================
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "check_sub":
+        subscribed = await is_subscribed(query.from_user.id, context)
+        if subscribed:
+            await query.message.reply_text(
+                "Obuna tasdiqlandi ✅\nEndi botdan foydalanishingiz mumkin.",
+                reply_markup=main_keyboard()
+            )
+        else:
+            await query.message.reply_text("Siz hali kanalga obuna bo‘lmagansiz.")
+
+
+# =========================
+# MESSAGE HANDLER
+# =========================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
     user = update.effective_user
+    text = update.message.text
 
-    if text == "👋 Salom":
+    add_user(user.id, user.first_name, user.username)
+
+    subscribed = await is_subscribed(user.id, context)
+    if not subscribed:
+        await check_subscription_message(update)
+        return
+
+    # broadcast rejimi
+    if context.user_data.get("broadcast_mode") and user.id == ADMIN_ID:
+        user_ids = get_all_user_ids()
+        sent = 0
+        failed = 0
+
+        for uid in user_ids:
+            try:
+                await context.bot.send_message(chat_id=uid, text=f"📢 Admin xabari:\n\n{text}")
+                sent += 1
+            except Exception:
+                failed += 1
+
+        context.user_data["broadcast_mode"] = False
+
         await update.message.reply_text(
-            f"Salom, {user.first_name}! Yaxshimisiz?"
+            f"Broadcast tugadi.\n\nYuborildi: {sent}\nXatolik: {failed}",
+            reply_markup=admin_keyboard()
         )
+        return
 
-    elif text == "🕒 Vaqt":
-        now = datetime.now().strftime("%H:%M:%S")
-        await update.message.reply_text(f"Hozirgi vaqt: {now}")
-
-    elif text == "📅 Sana":
-        today = datetime.now().strftime("%d-%m-%Y")
-        await update.message.reply_text(f"Bugungi sana: {today}")
-
-    elif text == "💡 Motivatsiya":
-        await update.message.reply_text(random.choice(motivations))
-
-    elif text == "👤 Profil":
-        username = f"@{user.username}" if user.username else "Username yo‘q"
+    if text == "👤 Profil":
+        username = f"@{user.username}" if user.username else "yo‘q"
         await update.message.reply_text(
+            f"👤 Profil\n\n"
             f"Ism: {user.first_name}\n"
-            f"Familiya: {user.last_name if user.last_name else 'yo‘q'}\n"
             f"Username: {username}\n"
             f"ID: {user.id}"
         )
 
-    elif text == "🌐 Kanal":
+    elif text == "📢 Kanal":
         await update.message.reply_text(
-            "Bu yerga o‘zingning kanal yoki guruh linkini qo‘yasan.\n"
-            "Masalan:\n"
-            "https://t.me/your_channel"
+            f"Kanal: {CHANNEL_USERNAME}\n"
+            f"Havola: https://t.me/{CHANNEL_USERNAME.replace('@', '')}"
         )
 
     elif text == "ℹ️ Yordam":
         await help_command(update, context)
 
-    elif text == "🧮 Kalkulyator":
+    elif text == "📊 Statistika":
+        count = get_users_count()
+        await update.message.reply_text(f"Bot foydalanuvchilari soni: {count}")
+
+    elif text == "📣 Broadcast":
+        if user.id != ADMIN_ID:
+            await update.message.reply_text("Siz admin emassiz.")
+            return
+
+        context.user_data["broadcast_mode"] = True
         await update.message.reply_text(
-            "Misol uchun shunday yozing:\n"
-            "2+2\n"
-            "10*5\n"
-            "100/4"
+            "Hamma foydalanuvchilarga yuboriladigan xabarni yozing.",
+            reply_markup=admin_keyboard()
         )
 
+    elif text == "👥 Userlar soni":
+        if user.id != ADMIN_ID:
+            await update.message.reply_text("Siz admin emassiz.")
+            return
+
+        count = get_users_count()
+        await update.message.reply_text(f"Jami userlar soni: {count}")
+
+    elif text == "🔙 Orqaga":
+        await update.message.reply_text("Asosiy menyu.", reply_markup=main_keyboard())
+
     else:
-        try:
-            result = eval(text, {"__builtins__": {}}, {})
-            await update.message.reply_text(f"Natija: {result}")
-        except:
-            await update.message.reply_text(
-                f"Siz yozdingiz: {text}\n"
-                "Men bu xabarni tushunmadim."
-            )
+        await update.message.reply_text("Tugmalardan foydalaning.", reply_markup=main_keyboard())
 
 
+# =========================
+# MAIN
+# =========================
 def main():
+    init_db()
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("about", about_command))
+    app.add_handler(CommandHandler("admin", admin_command))
+    app.add_handler(CommandHandler("id", id_command))
+    app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
     print("Bot ishga tushdi...")
